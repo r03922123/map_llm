@@ -13,6 +13,9 @@ import uuid
 from collections import deque
 from contextlib import asynccontextmanager
 
+# Set by Cloud Run automatically; "local" when running outside Cloud Run
+_REVISION = os.getenv("K_REVISION", "local")
+
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel, Field
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -96,7 +99,11 @@ class RecommendResponse(BaseModel):
 @app.get("/health")
 def health():
     """Smoke test. Cloud Run readiness probe hits this after every deploy."""
-    return {"status": "ok", "variant_id": cfg.serving.variant_id}
+    return {
+        "status": "ok",
+        "variant_id": cfg.serving.variant_id,
+        "revision": _REVISION,        # maps 1:1 to Docker image — use for rollback targeting
+    }
 
 
 @app.get("/suggest-types")
@@ -224,6 +231,7 @@ def metrics():
     n = len(data)
     return {
         "variant_id": cfg.serving.variant_id,
+        "revision": _REVISION,
         "request_count": n,
         "p50_ms": round(data[int(n * 0.50)], 1),
         "p95_ms": round(data[min(int(n * 0.95), n - 1)], 1),
