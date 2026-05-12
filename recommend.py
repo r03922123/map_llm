@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Coffee shop recommendation CLI.
+LLM-powered place recommendation CLI.
 
 Usage:
-    python recommend.py "quiet cafe with good wifi near downtown SF" --top-k 5
-    python recommend.py "cheap espresso bar in Brooklyn" --top-k 3 --candidates 30
+    python recommend.py "I want good ramen"
+    python recommend.py "rooftop bar" --top-k 3 --radius 1500
 """
 import argparse
 import os
@@ -16,93 +16,211 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from src.llm import init_vertex, parse_query, rerank_places
+from config import cfg
+from src.embedder import rank_by_similarity
+from src.llm import init_vertex, suggest_place_types
 from src.logger import StructuredLogger
-from src.places import search_places
+from src.models import NearbySearchParams, UserIntent
+from src.places import geocode, nearby_search
 
 logger = StructuredLogger("recommend")
 
+SEPARATOR = "─" * 50
+
+
+def _ask_rating_bounds() -> tuple[float, float]:
+    """Q1: structured rating range with explicit lower/upper bound."""
+    print(f"\n{SEPARATOR}")
+    print("Q1  Rating range  (scale 1.0 – 5.0)")
+    print(SEPARATOR)
+
+    while True:
+        try:
+            low  = input("  Lower bound (e.g. 4.0): ").strip() or "1.0"
+            high = input("  Upper bound (e.g. 5.0): ").strip() or "5.0"
+            lo, hi = float(low), float(high)
+            if not (1.0 <= lo <= hi <= 5.0):
+                print("  ! Lower must be ≤ Upper, both within 1.0–5.0. Try again.")
+                continue
+            return lo, hi
+        except ValueError:
+            print("  ! Enter a number like 3.5. Try again.")
+
+
+def _ask_place_type(request_id: str) -> tuple[str, list[str]]:
+    """
+    Q2: two-step type selection.
+      Step a — free text intent
+      Step b — LLM maps to API types → user picks by number
+    """
+    print(f"\n{SEPARATOR}")
+    print("Q2  Place type")
+    print(SEPARATOR)
+
+    intent_text = input("  What kind of place? (e.g. coffee shop, ramen, rooftop bar)\n  > ").strip()
+
+    print("\n  Finding matching types...", flush=True)
+    suggested = suggest_place_types(intent_text, request_id)
+
+    print(f"\n  Available types for '{intent_text}':")
+    for i, t in enumerate(suggested, 1):
+        print(f"    {i}. {t}")
+
+    while True:
+        raw = input("\n  Select type(s) by number (e.g. 1  or  1,2): ").strip()
+        try:
+            indices = [int(x.strip()) for x in raw.split(",")]
+            if all(1 <= i <= len(suggested) for i in indices):
+                selected = [suggested[i - 1] for i in indices]
+                return intent_text, selected
+            print(f"  ! Enter numbers between 1 and {len(suggested)}.")
+        except ValueError:
+            print("  ! Enter numbers only, e.g. 1 or 1,3.")
+
+
+def _ask_description() -> str:
+    """Q4: free-text ideal place description — embedded for semantic similarity ranking."""
+    print(f"\n{SEPARATOR}")
+    print("Q4  Describe your ideal place")
+    print(SEPARATOR)
+    while True:
+        desc = input(
+            "  In 1–2 sentences, what are you looking for?\n"
+            "  (e.g. 'Quiet corner spot, natural light, good for solo laptop work')\n"
+            "  > "
+        ).strip()
+        if desc:
+            return desc
+        print("  ! Please enter a description.")
+
+
+def _ask_geography() -> tuple[str, str]:
+    """Q3: explicit city + country — split so geocoding gets a clean, unambiguous string."""
+    print(f"\n{SEPARATOR}")
+    print("Q3  Location")
+    print(SEPARATOR)
+    city    = input("  City:    ").strip()
+    country = input("  Country: ").strip()
+    return city, country
+
 
 def _fmt_open(open_now) -> str:
-    if open_now is True:
-        return "Open now"
-    if open_now is False:
-        return "Closed"
+    if open_now is True:  return "Open now"
+    if open_now is False: return "Closed"
     return "Hours unknown"
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(
-        description="LLM-powered coffee shop recommendations via Google Maps"
-    )
-    parser.add_argument("query", help='e.g. "quiet cafe with wifi near downtown SF"')
-    parser.add_argument("--top-k", type=int, default=5, help="Number of results (default: 5)")
-    parser.add_argument(
-        "--candidates",
-        type=int,
-        default=20,
-        help="Places API candidate pool size before re-ranking (default: 20)",
-    )
-    parser.add_argument(
-        "--project",
-        default=os.getenv("GOOGLE_CLOUD_PROJECT"),
-        help="GCP project ID (defaults to GOOGLE_CLOUD_PROJECT env var)",
-    )
+    parser = argparse.ArgumentParser(description="LLM-powered place recommendations")
+    parser.add_argument("query", help='e.g. "good ramen near me"')
+    parser.add_argument("--top-k",  type=int, default=cfg.results.default_top_k,       help=f"Results to show (default: {cfg.results.default_top_k})")
+    parser.add_argument("--radius", type=int, default=cfg.recall.default_radius_meters, help=f"Search radius in metres (default: {cfg.recall.default_radius_meters})")
     args = parser.parse_args()
 
     api_key = os.getenv("PLACES_API_KEY")
     if not api_key:
-        sys.exit("Error: PLACES_API_KEY not set. Add it to .env or export it.")
-    if not args.project:
-        sys.exit("Error: GOOGLE_CLOUD_PROJECT not set. Add it to .env or pass --project.")
+        sys.exit("Error: PLACES_API_KEY not set.")
 
     request_id = uuid.uuid4().hex[:8]
-    logger.info(request_id, "request_start", query=args.query, top_k=args.top_k)
+    logger.info(request_id, "session_start", query=args.query)
     t_start = time.time()
 
-    # Step 1 — LLM translates natural language → optimised Places search string
-    init_vertex(project=args.project)
-    search_params = parse_query(args.query, request_id)
+    init_vertex()
 
-    # Step 2 — Fetch candidate places from Google Maps
-    candidates = search_places(
-        query=search_params.search_query,
-        api_key=api_key,
-        max_results=args.candidates,
-        request_id=request_id,
+    print(f'\nQuery: "{args.query}"')
+
+    # ── Structured question phase (deterministic — no LLM except Q2b type mapping) ──
+
+    min_rating, max_rating = _ask_rating_bounds()
+    logger.info(request_id, "q1_rating", min=min_rating, max=max_rating)
+
+    intent_text, selected_types = _ask_place_type(request_id)
+    logger.info(request_id, "q2_types", intent=intent_text, selected=selected_types)
+
+    city, country = _ask_geography()
+    logger.info(request_id, "q3_location", city=city, country=country)
+
+    description = _ask_description()
+    logger.info(request_id, "q4_description", description=description)
+
+    user_intent = UserIntent(
+        query=args.query,
+        min_rating=min_rating,
+        max_rating=max_rating,
+        intent_text=intent_text,
+        selected_types=selected_types,
+        city=city,
+        country=country,
+        description=description,
     )
 
+    # ── Geocode: location name → lat/lng ──────────────────────────────────────
+    print(f"\n  Geocoding '{user_intent.location_name}'...")
+    lat, lng = geocode(user_intent.location_name, api_key, request_id)
+
+    params = NearbySearchParams(
+        location_name=user_intent.location_name,
+        latitude=lat,
+        longitude=lng,
+        radius_meters=args.radius,
+        included_types=selected_types,
+        keyword=None,
+        max_results=cfg.places.max_candidates,
+    )
+
+    # ── Recall: Nearby Search API ─────────────────────────────────────────────
+    print(f"  Searching nearby ({args.radius}m radius)...")
+    candidates = nearby_search(params, api_key, request_id)
+
     if not candidates:
-        print("No places found. Try broadening your query.")
+        print("No places found. Try --radius 2000 or a different location.")
         return
 
-    # Step 3 — LLM re-ranks candidates against the original user intent
-    top_k = min(args.top_k, len(candidates))
-    recommendations = rerank_places(
-        user_query=args.query,
-        places=candidates,
-        top_k=top_k,
+    # Post-filter by rating range (Nearby Search has no native rating filter)
+    rated = [p for p in candidates if p.rating is not None]
+    in_range = [p for p in rated if min_rating <= p.rating <= max_rating]
+    unrated  = [p for p in candidates if p.rating is None]
+    filtered = in_range + unrated   # keep unrated — they may be new/good
+
+    logger.info(
+        request_id, "rating_filter",
+        before=len(candidates), after=len(filtered),
+        min=min_rating, max=max_rating,
+    )
+
+    if not filtered:
+        print(f"No places found with rating {min_rating}–{max_rating}. Try widening the range.")
+        return
+
+    # ── Stage 3: Embedding re-rank ────────────────────────────────────────────
+    print("  Ranking by semantic similarity to your description...")
+    ranked = rank_by_similarity(
+        description=user_intent.description,
+        places=filtered,
+        top_k=cfg.embedding.top_k,
         request_id=request_id,
     )
 
     total_ms = round((time.time() - t_start) * 1000, 1)
     logger.info(request_id, "request_complete", total_latency_ms=total_ms)
 
-    # ── Print results ──────────────────────────────────────────────────────────
+    # ── Print results ─────────────────────────────────────────────────────────
     print(f"\n{'━' * 60}")
-    print(f"  Top {top_k} coffee shops for: \"{args.query}\"")
+    print(f"  Top {len(ranked)} of {len(filtered)}  |  {city}, {country}  |  rating {min_rating}–{max_rating}")
+    print(f"  Types: {selected_types}")
+    print(f"  Your description: \"{user_intent.description}\"")
     print(f"{'━' * 60}\n")
 
-    for rec in recommendations:
-        p = rec.place
-        stars = f"{p.rating} ⭐" if p.rating else "No rating"
-        reviews = f"({p.user_rating_count:,} reviews)" if p.user_rating_count else ""
-        price = p.price_level.replace("PRICE_LEVEL_", "").title() if p.price_level else "N/A"
+    for rank, (p, score) in enumerate(ranked, 1):
+        stars   = f"{p.rating} ⭐" if p.rating else "No rating"
+        n_rev   = f"({p.user_rating_count:,} reviews)" if p.user_rating_count else ""
+        price   = p.price_level.replace("PRICE_LEVEL_", "").title() if p.price_level else "N/A"
+        has_rev = f"  {len(p.reviews)} review snippets" if p.reviews else "  no reviews (name+address used)"
 
-        print(f"#{rec.rank}  {p.name}  [match: {rec.score:.0%}]")
+        print(f"#{rank}  {p.name}  [similarity: {score:.2%}]")
         print(f"    {p.address}")
-        print(f"    {stars} {reviews}  |  Price: {price}  |  {_fmt_open(p.open_now)}")
-        print(f"    Why: {rec.reason}")
+        print(f"    {stars} {n_rev}  |  Price: {price}  |  {_fmt_open(p.open_now)}")
+        print(f"   {has_rev}")
         if p.maps_url:
             print(f"    Maps: {p.maps_url}")
         print()

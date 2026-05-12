@@ -1,0 +1,47 @@
+# =============================================================================
+# Map LLM — Hyperparameter Config
+# Edit this file to tune the system. No code changes needed.
+# =============================================================================
+
+# ── GCP / Vertex AI ───────────────────────────────────────────────────────────
+gcp:
+  project: "composite-theme-247507"
+  location: "us-central1"   # Vertex AI region; must match model availability
+
+# ── LLM (type suggestion + re-ranking) ───────────────────────────────────────
+# temperature: 0.1 = near-deterministic structured output (good for JSON extraction)
+# Raising temperature increases variety in re-rank reasoning but risks malformed JSON.
+llm:
+  model: "publishers/google/models/gemini-2.5-flash"
+  temperature: 0.1
+
+# ── Places API (Nearby Search) ────────────────────────────────────────────────
+# max_candidates: pool size fetched before rating filter + re-rank.
+# Higher = better recall but higher cost ($0.032/request regardless of count returned).
+# Nearby Search cap is 20; raise only if switching to Text Search.
+places:
+  max_candidates: 20
+  nearby_search_url: "https://places.googleapis.com/v1/places:searchNearby"
+  geocode_url: "https://maps.googleapis.com/maps/api/geocode/json"
+
+# ── Recall ────────────────────────────────────────────────────────────────────
+# default_radius_meters: used when user doesn't pass --radius.
+# 1000m (~10 min walk) is a sensible default for urban queries.
+# Increase to 3000–5000 for suburban areas or sparse place types.
+recall:
+  default_radius_meters: 1000
+  max_radius_meters: 5000
+
+# ── Embedding (Stage 3 semantic re-ranking) ───────────────────────────────────
+# model: text-embedding-004 produces 768-dim vectors; do NOT change after first run
+#        without re-embedding everything — dimension mismatch is a silent failure.
+# top_k: final results shown after embedding re-rank (must be ≤ recall.max_candidates)
+embedding:
+  model: "text-embedding-004"
+  dimensions: 768
+  top_k: 10
+
+# ── Results ───────────────────────────────────────────────────────────────────
+# default_top_k: shown to user when --top-k is not passed.
+results:
+  default_top_k: 5
