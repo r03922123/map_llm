@@ -41,6 +41,13 @@ embedding:
   dimensions: 768
   top_k: 10
 
+# ── Serving ───────────────────────────────────────────────────────────────────
+# variant_id: bump this string every time the pipeline changes (new model, new
+# prompt, new field mask). Every request log carries it — without it you cannot
+# attribute a metric change to a specific code change (CLAUDE.md, Experimentation).
+serving:
+  variant_id: "v1"
+
 # ── Results ───────────────────────────────────────────────────────────────────
 # default_top_k: shown to user when --top-k is not passed.
 results:

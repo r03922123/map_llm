@@ -37,6 +37,11 @@ class EmbeddingConfig:
 
 
 @dataclass
+class ServingConfig:
+    variant_id: str
+
+
+@dataclass
 class ResultsConfig:
     default_top_k: int
 
@@ -48,6 +53,7 @@ class Config:
     places: PlacesConfig
     recall: RecallConfig
     embedding: EmbeddingConfig
+    serving: ServingConfig
     results: ResultsConfig
 
 
@@ -60,6 +66,7 @@ def load_config(path: Path = Path(__file__).parent / "config.yaml") -> Config:
         places=PlacesConfig(**raw["places"]),
         recall=RecallConfig(**raw["recall"]),
         embedding=EmbeddingConfig(**raw["embedding"]),
+        serving=ServingConfig(**raw["serving"]),
         results=ResultsConfig(**raw["results"]),
     )
 
