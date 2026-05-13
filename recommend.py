@@ -16,14 +16,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from config import cfg
-from src.embedder import rank_by_similarity
-from src.llm import init_vertex, suggest_place_types
-from src.logger import StructuredLogger
-from src.models import NearbySearchParams, UserIntent
-from src.places import geocode, nearby_search
+from map_llm.config import cfg
+from map_llm.llm.gemini import init_vertex, suggest_place_types
+from map_llm.models import NearbySearchParams, UserIntent
+from map_llm.observability.logger import StructuredLogger
+from map_llm.pipeline.ranker import rank_by_similarity
+from map_llm.pipeline.recall import geocode, nearby_search
 
-logger = StructuredLogger("recommend")
+logger = StructuredLogger("cli.recommend")
 
 SEPARATOR = "─" * 50
 
@@ -176,7 +176,7 @@ def main() -> None:
         print("No places found. Try --radius 2000 or a different location.")
         return
 
-    # Post-filter by rating range (Nearby Search has no native rating filter)
+    # ── Filter: rating range (Nearby Search has no native rating filter) ──────
     rated = [p for p in candidates if p.rating is not None]
     in_range = [p for p in rated if min_rating <= p.rating <= max_rating]
     unrated  = [p for p in candidates if p.rating is None]
@@ -192,7 +192,7 @@ def main() -> None:
         print(f"No places found with rating {min_rating}–{max_rating}. Try widening the range.")
         return
 
-    # ── Stage 3: Embedding re-rank ────────────────────────────────────────────
+    # ── Rank: embedding re-rank ───────────────────────────────────────────────
     print("  Ranking by semantic similarity to your description...")
     ranked = rank_by_similarity(
         description=user_intent.description,

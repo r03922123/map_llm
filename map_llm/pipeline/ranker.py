@@ -1,14 +1,18 @@
+"""
+Ranking stage: embed the user description and all candidate place texts in a single
+batch call, then sort by cosine similarity.
+"""
 import math
 import time
 
 from google import genai
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 
-from config import cfg
-from .logger import StructuredLogger
-from .models import Place
+from map_llm.config import cfg
+from map_llm.models import Place
+from map_llm.observability.logger import StructuredLogger
 
-logger = StructuredLogger("embedder")
+logger = StructuredLogger("pipeline.ranker")
 
 _client: genai.Client | None = None
 
@@ -58,7 +62,7 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
 def build_place_text(p: Place) -> str:
     """
     Concatenate all available text signals for a place into one string for embedding.
-    Order: type → name → address → reviews (most semantic signal last, recency-weighted).
+    Order: type → name → address → reviews (most semantic signal last).
     Fallback when reviews are empty: name + type + address still gives useful signal
     for geo/category similarity, just not vibe/atmosphere similarity.
     """

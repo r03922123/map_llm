@@ -1,3 +1,7 @@
+"""
+Gemini LLM client: place type suggestion and optional LLM-based re-ranking.
+All calls go through Vertex AI — no direct Gemini API key needed.
+"""
 import json
 import time
 from typing import List
@@ -6,11 +10,11 @@ from google import genai
 from google.genai import types
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 
-from config import cfg
-from .logger import StructuredLogger
-from .models import Place, Recommendation
+from map_llm.config import cfg
+from map_llm.models import Place, Recommendation
+from map_llm.observability.logger import StructuredLogger
 
-logger = StructuredLogger("llm")
+logger = StructuredLogger("llm.gemini")
 
 _client: genai.Client | None = None
 
@@ -33,7 +37,7 @@ def _json_config() -> types.GenerateContentConfig:
     )
 
 
-# Full list of supported Google Places API types for reference:
+# Full list of supported Google Places API types:
 # https://developers.google.com/maps/documentation/places/web-service/place-types
 _AVAILABLE_TYPES = [
     # Food & drink
@@ -103,9 +107,9 @@ def rerank_places(
 ) -> List[Recommendation]:
     """
     Re-rank Nearby Search candidates against the full stated user intent.
-    The API returns results sorted by distance — it has no awareness of
-    the user's rating preference or specific place intent. LLM re-ranking
-    closes that gap using all collected context.
+    Not used in the main pipeline — embedding re-rank is faster and more consistent.
+    Retained as an alternative for complex constraint queries that cosine similarity
+    cannot capture (see docs/ml_methods.md — "What the Pipeline Does Not Do").
     """
     candidates_text = "\n".join(
         f"{i + 1}. {p.name} | Type: {p.primary_type or 'N/A'} | "

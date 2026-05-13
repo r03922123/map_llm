@@ -1,5 +1,21 @@
 # Engineering Design
 
+## Mental Model
+
+Before reading the implementation details, build this mental model of what kind of system this is and what engineering problems it creates:
+
+**What kind of system:** a synchronous, latency-sensitive serving API that calls three external services (Geocoding, Places, Vertex AI) per user request. None of these services are under our control. Any of them can be slow, unavailable, or return unexpected data.
+
+**The core engineering problems this creates:**
+1. **Reliability**: if any one external call fails, the whole request fails. Retries must be intelligent (not simultaneous) to avoid making a struggling upstream worse.
+2. **Observability**: HTTP 200 does not mean correct results. A Places API call that returns zero candidates, or an embedding that produces wrong scores, looks identical to a successful request at the HTTP layer. The only way to know the system is working correctly is to log the intermediate state of every request.
+3. **Latency**: the three external calls are sequential (each feeds the next), so end-to-end latency is their sum. Tail latency (p99) matters more than mean because LLM inference variance is high — a slow Vertex AI call can make 1 in 100 requests 10× slower.
+4. **Configuration**: this is an ML-backed service. Hyperparameters (`radius`, `top_k`, `temperature`) change frequently during experimentation. They must not be hardcoded in Python — they need to be versioned, tunable without code changes, and bundled with the model for rollback.
+
+The engineering decisions in this doc each trace back to one of these four problems. If a decision seems over-engineered for a small project, the reason is that these same problems appear at every scale — addressing them now means the patterns are in place when the system grows.
+
+---
+
 ## Overview
 
 Map LLM is a place recommendation service. It exposes a REST API (FastAPI on Cloud Run) and an interactive CLI. A request flows through three sequential stages — recall, filter, rank — each calling a separate external service. All stages are deterministic except the LLM type-suggestion call in the question phase.
@@ -217,19 +233,23 @@ CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8080"]
 
 ```
 map_llm/
-├── app.py              FastAPI service — routes, middleware, schemas
-├── recommend.py        Interactive CLI — question phase + pipeline
-├── config.py           Typed config dataclasses + cfg singleton
-├── config.yaml         All tunables (no code change needed to tune)
+├── app.py                      Entry point — re-exports app for `uvicorn app:app`
+├── recommend.py                Interactive CLI — question phase + pipeline
+├── config.yaml                 All tunables (no code change needed to tune)
 ├── Dockerfile
 ├── requirements.txt
-├── scripts/
-│   ├── deploy.sh       Phased rollout: shadow → canary → full
-│   └── smoke_test.py   Post-deploy gate
-└── src/
-    ├── embedder.py     Batch embed + cosine similarity ranking
-    ├── llm.py          Gemini: type suggestion + LLM re-ranker (unused in main pipeline)
-    ├── logger.py       StructuredLogger — newline-delimited JSON
-    ├── models.py       Pydantic models: Place, UserIntent, NearbySearchParams, Recommendation
-    └── places.py       Geocoding + Nearby Search (Places API)
+└── map_llm/                    Main Python package — grouped by concern
+    ├── config.py               Typed config dataclasses + cfg singleton
+    ├── models.py               Shared domain models: Place, UserIntent, NearbySearchParams
+    ├── api/
+    │   └── server.py           FastAPI app — routes, schemas, LatencyMiddleware
+    ├── llm/
+    │   └── gemini.py           Gemini client — type suggestion + LLM re-ranker
+    ├── observability/
+    │   └── logger.py           StructuredLogger — newline-delimited JSON
+    └── pipeline/
+        ├── recall.py           Recall stage — Geocoding + Nearby Search (Places API)
+        └── ranker.py           Rank stage — batch embed + cosine similarity
 ```
+
+**Why this layout:** each subdirectory maps to one responsibility in the serving pipeline. A new engineer can find all HTTP concerns in `api/`, all ML pipeline logic in `pipeline/`, and all LLM calls in `llm/`. This is the standard package-by-layer structure used in Google Python services — it avoids the "flat bag of modules" anti-pattern where every file is a sibling and the reader has to read all filenames to understand the system's shape.

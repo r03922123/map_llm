@@ -1,5 +1,43 @@
 # ML Methods
 
+## Background: Key Concepts
+
+This section covers the four concepts you need before reading the rest of this doc. If you already know them, skip ahead.
+
+### What is an embedding?
+
+An embedding is a fixed-length list of numbers (a vector) that represents the *meaning* of a piece of text. Two texts that mean similar things have vectors that point in similar directions in that vector space. Two texts that mean different things point in different directions.
+
+For example: `"quiet ramen spot with rich broth"` and `"cozy noodle bar, tonkotsu, not loud"` will have vectors very close to each other. `"hardware store downtown"` will be far from both.
+
+The model (`text-embedding-004`) is a neural network trained to produce these vectors. You give it text; it gives you 768 numbers. You do not train it yourself — you call it as a service.
+
+### What is cosine similarity?
+
+Cosine similarity measures the angle between two vectors, returning a number from -1 to 1. Two vectors pointing in exactly the same direction score 1.0 (identical meaning). Two vectors pointing in opposite directions score -1.0. Unrelated texts typically score 0.3–0.6; strong semantic matches score 0.7–0.9.
+
+The key insight: it measures *direction*, not magnitude. This means a short review and a long review can score equally if they convey the same meaning.
+
+### What is retrieval vs. generation?
+
+A **generative** approach asks the LLM to invent an answer: "What are good ramen spots in SF?" The LLM produces names from its training data — but training data is static, places close or change names, and LLMs confidently hallucinate plausible-sounding but wrong addresses and ratings.
+
+A **retrieval** approach queries a live, authoritative database (here, Google Places) to get real candidates, then uses ML only for ranking, not for sourcing facts. The LLM touches only the parts it is actually good at (language understanding, semantic mapping), not the parts it is bad at (real-world factual recall about specific businesses).
+
+Almost every production recommendation system at Google uses retrieval + ranking, not generation: YouTube recommends videos from a real video corpus, not by generating video descriptions.
+
+### What is the recall → filter → rank paradigm?
+
+This is the standard production architecture for recommendation systems at scale. It appears at Google (search ranking, YouTube), Airbnb (listing search), LinkedIn (job recommendations), and Uber (restaurant ordering in Eats):
+
+1. **Recall (retrieval):** pull a candidate set from a large corpus fast and cheap. Optimise for coverage (don't miss good options), not precision. This stage can be approximate.
+2. **Filter:** drop candidates that violate hard constraints (wrong rating range, wrong category). Binary in/out — no scoring.
+3. **Rank:** score the remaining candidates by the metric you care about (semantic relevance, predicted CTR, predicted rating). This stage is the ML-heavy part and runs on a small candidate set, so it can be expensive per item.
+
+The reason to separate these stages is cost and latency: running a full neural re-ranker on all 10 million places in a city is infeasible. Running it on 20 pre-filtered candidates takes 300ms.
+
+---
+
 ## Problem Framing
 
 The task is place recommendation given a natural-language query. This is formulated as **retrieval + ranking**, not generation:
@@ -202,6 +240,26 @@ This adds ~500ms per place and cost per image. The current text-only embedding a
 ### No online learning
 
 The ranking is frozen at training/design time (the embedding model weights). There is no feedback loop from user clicks or explicit ratings back into the model. This is appropriate at the current scale — online learning requires a feedback collection mechanism, a training pipeline, and safeguards against feedback loops (e.g. popular places getting more clicks → higher rank → more clicks). The prediction logs provide the raw data to build this if needed.
+
+---
+
+## How This Maps to Google Production ML
+
+This project deliberately mirrors patterns from Google's production ML stack. Understanding these parallels is useful context for onboarding and for applied scientist interviews.
+
+| This project | Google production equivalent | Why it matters |
+|---|---|---|
+| Recall via Places Nearby Search | ANN (approximate nearest neighbour) retrieval from a large corpus (e.g. ScaNN at Google) | Both retrieve a small candidate set fast before the expensive ranking stage |
+| Embedding re-rank with `text-embedding-004` | Two-tower neural ranking model (used in YouTube, Google Search) | The two-tower pattern encodes query and document separately, then scores by dot product/cosine — exactly what `embed_texts` does |
+| Rating filter (hard constraint) | Business rules layer before ML scoring | Hard constraints must be enforced before ML; the model should not be asked to "learn" that rating=1 is bad |
+| `variant_id` on every log line | Experiment ID in Google's Monarch/Dremel logs | The minimum viable A/B infra — without it, metric changes cannot be attributed to specific model changes |
+| Structured request logging | Google's Prediction Service prediction logs | At Google, every ML prediction is logged to Bigtable/Spanner for offline eval, debugging, and drift detection |
+| Phased rollout: 0% → smoke test → 10% → 100% | Hermetic binary promotion (Google's Borg/Spanner release process) | At Google, no binary goes to 100% traffic without staged promotion; the mechanism differs but the principle is identical |
+| `p95/p99` latency in `/metrics` | Google's SLO dashboards (Monarch) | Google SRE sets SLOs on p99, not mean. Jeff Dean's "The Tail at Scale" is required reading for anyone touching serving systems |
+| Retry with exponential backoff + jitter (tenacity) | Google's Stubby/gRPC retry policies | Google's RPC framework has built-in retry budgets; the jitter principle is the same: avoid thundering herds on upstream recovery |
+| `config.yaml` versioned with code | Google's experiment configs checked into version control | At Google, model configs (hyperparameters, feature lists) are versioned alongside the model binary so rollback restores both together |
+
+The main gap between this project and a Google-scale system is the feedback loop: there is no signal flowing from user behaviour back into the ranking model. At Google, click-through rates, dwell time, and explicit ratings would feed into periodic model retraining. The `prediction_logs` from this project provide the raw data to build that loop — it just requires a labelling and retraining pipeline that is out of scope here.
 
 ---
 

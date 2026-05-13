@@ -57,7 +57,7 @@ class Config:
     results: ResultsConfig
 
 
-def load_config(path: Path = Path(__file__).parent / "config.yaml") -> Config:
+def load_config(path: Path = Path(__file__).parent.parent / "config.yaml") -> Config:
     with open(path) as f:
         raw = yaml.safe_load(f)
     return Config(

@@ -1,14 +1,18 @@
+"""
+Recall stage: geocode a location name to lat/lng, then fetch nearby place candidates
+from the Google Places Nearby Search API.
+"""
 import time
 from typing import List
 
 import requests
 from tenacity import retry, stop_after_attempt, wait_random_exponential
 
-from config import cfg
-from .logger import StructuredLogger
-from .models import NearbySearchParams, Place
+from map_llm.config import cfg
+from map_llm.models import NearbySearchParams, Place
+from map_llm.observability.logger import StructuredLogger
 
-logger = StructuredLogger("places")
+logger = StructuredLogger("pipeline.recall")
 
 # ── Field mask ────────────────────────────────────────────────────────────────
 # SKU breakdown (billed at the highest tier present):
@@ -16,7 +20,7 @@ logger = StructuredLogger("places")
 #   Advanced : rating, userRatingCount, priceLevel, currentOpeningHours
 #   Preferred: reviews                                ← drives SKU to $0.040/req
 #
-# No redundant fields found — all are used in rating filter, embedding text, or display.
+# No redundant fields — all are used in rating filter, embedding text, or display.
 #
 # TODO: Text Search API differentiation
 #   Nearby Search returns results sorted by proximity only — no keyword/semantic signal.

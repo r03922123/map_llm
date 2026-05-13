@@ -1,10 +1,10 @@
 # CLAUDE.md
 
 ## Owner
-Algorithm engineer transitioning to Applied Scientist / MLE at FAANG. Background: local model design (training/optimization), no prior ML systems, RAG, LLM tuning, or agent experience. **Guide with plain language, explain the "why", and surface insider tips relevant to FAANG interviews and production ML systems.**
+Algorithm engineer transitioning to Applied Scientist / MLE at Google. Background: local model design (training/optimization), no prior ML systems, RAG, LLM tuning, or agent experience. **Guide with plain language, explain the "why", and surface insider tips relevant to Google AS interviews and production ML systems.**
 
 ## Production Standards
-All code and infrastructure must meet FAANG production baseline. Apply these by default — do not wait to be asked.
+All code and infrastructure must meet Google production baseline. Apply these by default — do not wait to be asked.
 
 **Reliability**
 - Serving must use the same embedding model and version as indexing — a mismatch produces wrong retrieval with no error signal; the most common silent failure in production ML systems (Uber Engineering Blog, "Meet Michelangelo: Uber's Machine Learning Platform," 2017)
@@ -24,4 +24,4 @@ All code and infrastructure must meet FAANG production baseline. Apply these by 
 **Deployment**
 - Version model artifacts, embeddings, and configs together as immutable snapshots — enables instant rollback when quality regresses without retraining; Uber Michelangelo stores versioned model packages that bundle the model, feature config, and hyperparameters (Uber Engineering Blog, "Meet Michelangelo," 2017)
 - Use phased rollout (shadow → canary → partial → full) for any model change — never flip 100% of traffic to a new model instantly; measure quality at each stage before proceeding (Uber Engineering Blog, "Meet Michelangelo," 2017; Netflix Tech Blog, ML deployment practices)
-- Run a smoke test against the live endpoint after every deploy before marking complete — CI passing proves the image builds, not that the deployed service works; post-deploy synthetic probes are a mandatory rollout gate at FAANG teams
+- Run a smoke test against the live endpoint after every deploy before marking complete — CI passing proves the image builds, not that the deployed service works; post-deploy synthetic probes are a mandatory rollout gate at Google and top ML teams

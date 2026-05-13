@@ -2,6 +2,16 @@
 
 A place recommendation API powered by Google Places API and Vertex AI. Takes a natural-language description of what you're looking for, recalls nearby candidates, filters by rating, and re-ranks using embedding similarity between your description and place reviews.
 
+## For New Team Members
+
+This project is a production-grade implementation of the **recall → filter → rank** pattern used in every large-scale recommendation system at Google, Meta, LinkedIn, and Airbnb. If you have never built an ML-backed serving system before, read the docs in this order:
+
+1. **This README** — system overview, API contract, deployment mechanics
+2. **`docs/ml_methods.md`** — why each ML decision was made; starts with foundational concepts (embeddings, retrieval vs. generation) before assuming any ML background
+3. **`docs/engineering.md`** — production engineering decisions: observability, retry strategy, config management, phased rollout
+
+Each doc explains not just *what* was built but *why* — including what was deliberately left out and the trade-off that drove that choice. If you encounter a decision that seems arbitrary, look for the "Why" explanation nearby; if it is missing, that is a documentation gap worth flagging.
+
 ## Architecture
 
 ```
@@ -158,21 +168,29 @@ gcloud secrets add-iam-policy-binding PLACES_API_KEY \
 
 ```
 map_llm/
-├── app.py              # FastAPI service
-├── recommend.py        # Interactive CLI
-├── config.py           # Typed config dataclasses
-├── config.yaml         # All tunables
+├── app.py                      # Entry point: re-exports app for uvicorn app:app
+├── recommend.py                # Interactive CLI
+├── config.yaml                 # All tunables (no code change needed to tune)
 ├── Dockerfile
 ├── requirements.txt
 ├── scripts/
-│   ├── deploy.sh       # Phased rollout script
-│   └── smoke_test.py   # Post-deploy gate
-└── src/
-    ├── embedder.py     # text-embedding-004 batch embed + cosine re-rank
-    ├── llm.py          # Gemini type suggestion
-    ├── logger.py       # Structured JSON logging (request_id on every line)
-    ├── models.py       # Pydantic models
-    └── places.py       # Geocoding + Nearby Search
+│   ├── deploy.sh               # Phased rollout: shadow → canary → full
+│   └── smoke_test.py           # Post-deploy gate
+├── docs/
+│   ├── engineering.md          # Engineering design decisions
+│   └── ml_methods.md           # ML methods and production parallels
+└── map_llm/                    # Main Python package
+    ├── config.py               # Typed config dataclasses + cfg singleton
+    ├── models.py               # Shared domain models (Place, UserIntent, etc.)
+    ├── api/
+    │   └── server.py           # FastAPI app: routes, schemas, middleware
+    ├── llm/
+    │   └── gemini.py           # Gemini: type suggestion + LLM re-ranker
+    ├── observability/
+    │   └── logger.py           # StructuredLogger — newline-delimited JSON
+    └── pipeline/
+        ├── recall.py           # Geocoding + Nearby Search (Places API)
+        └── ranker.py           # Batch embed + cosine similarity ranking
 ```
 
 ## Production standards
