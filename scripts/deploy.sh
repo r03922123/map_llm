@@ -22,6 +22,13 @@ echo "    image : ${IMAGE}"
 echo "    region: ${REGION}"
 echo
 
+# ── 0. Offline eval gate ──────────────────────────────────────────────────────
+# Runs NDCG@5 against the golden set before any build or traffic change.
+# A regression (>5% drop from baseline.json) exits here and blocks the deploy.
+echo "[0/5] Running offline eval gate ..."
+python3 -m map_llm.evaluation.eval
+echo
+
 # ── 1. Build & push tagged image ─────────────────────────────────────────────
 echo "[1/5] Building and pushing ${IMAGE} ..."
 gcloud builds submit "${REPO_ROOT}" \

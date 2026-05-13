@@ -1,0 +1,7 @@
+{
+  "ndcg_at_k": null,
+  "k": 5,
+  "n": 3,
+  "variant_id": null,
+  "note": "Not yet populated. Run `python -m map_llm.evaluation.eval --update-baseline` after verifying the golden set against live API output to record the initial baseline."
+}

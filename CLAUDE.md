@@ -1,27 +1,75 @@
-# CLAUDE.md
+# Inherits: ABC ML System Design
+# Location: /Users/linjiehong/Desktop/muthur/CLAUDE.md
+@/Users/linjiehong/Desktop/muthur/CODE_STYLE.md
+
+---
+
+## Abstract Properties
+
+```
+serving_mode: real-time
+sla_p99_ms: 2000
+primary_eval_metric: ndcg@5
+```
+
+`sla_p99_ms = 2000`: three sequential external calls (geocode ~100ms, Nearby Search ~300ms, Vertex AI embed ~300ms) plus overhead. The 2000ms budget is the observed p99 ceiling at 1x load; breach triggers rollback.
+
+`primary_eval_metric = ndcg@5`: measures whether known-good places appear near the top of the embedding re-rank output. NDCG is the correct metric here because position matters — a known-good place ranked #1 is better than the same place ranked #5. Accuracy (did any expected place appear?) ignores rank and is too weak a signal.
+
+---
+
+## Abstract Methods
+
+### eval_strategy
+
+**Golden set:** `data/golden/golden_set.json` — a frozen list of `(description, city, selected_types, expected_names)` tuples. Collected by running the live pipeline on diverse queries and manually verifying the top results are correct. Never used for hyperparameter tuning. Refresh when `build_place_text()` changes, the embedding model changes, or the set falls below 20 examples.
+
+**Primary metric:** NDCG@5. A place is relevant (score 1) if its name appears in `expected_names`; irrelevant (score 0) otherwise. Ideal ranking has all expected places in positions 1–5.
+
+**Promotion threshold:** NDCG@5 must not drop more than 5% from the current baseline (`data/golden/baseline.json`). If it does, the eval runner exits 1 and `deploy.sh` blocks the canary step.
+
+**Eval runner:** `map_llm/evaluation/eval.py` — loads the golden set, runs the recall → filter → rank pipeline for each entry, computes per-query NDCG@5, reports mean, compares against baseline.
+
+---
+
+### feature_pipeline
+
+**Data source:** Google Places API (Nearby Search, Preferred SKU) — fetched live at inference time, not a static dataset.
+
+**Feature computation:** `map_llm/pipeline/ranker.py:build_place_text()` is the single source of truth for document representation. It concatenates `primary_type + name + address + reviews` (up to 5 snippets). Both the API path (`map_llm/api/server.py`) and the CLI (`recommend.py`) call this function — no duplication.
+
+**Skew risk:** No trained model, so there is no training-serving skew in the traditional sense. The analogous risk is embedding-model drift: if `text-embedding-004` version at serve time differs from the version that produced any cached embeddings, cosine similarity becomes meaningless. Mitigation: embeddings are never cached — all are computed fresh per request. Version is pinned in `config.yaml`.
+
+**Schema:** The document fields are `primary_type`, `name`, `address`, `reviews`. Any change to this set is a breaking change — the golden set must be re-run and a new baseline recorded before the change is promoted.
+
+---
+
+### rollback_trigger
+
+| Signal | Threshold | Window | Action |
+|---|---|---|---|
+| Smoke test | any failure | post-deploy | stay at 0% traffic; do not cut canary |
+| p99 latency | > 2000ms | 5-minute rolling window | roll back to previous revision |
+| NDCG@5 | > 5% drop from baseline | eval run in `deploy.sh` | block canary step; do not build or deploy |
+
+Latency alert: Cloud Monitoring on the Cloud Run service, alarm on `request_latencies` p99.
+NDCG@5 gate: enforced by `scripts/deploy.sh` step [0] before image build.
+
+---
+
+## Overrides
+
+### seed_management
+N/A — no model training. The only ML model in this system is `text-embedding-004`, a pre-trained Vertex AI service. No random state to fix or log.
+
+### data_snapshot
+N/A — no training dataset. Input data is fetched from the live Places API at inference time. The equivalent here is the golden set snapshot (`data/golden/golden_set.json`), which is versioned in git as part of `artifact_versioning()`.
+
+### distribution_monitoring
+Partial. Per-request logs record `candidate_count`, `with_reviews`, and `top_scores` on every request — raw data exists. Full distribution monitoring (query length, types distribution, score drift over time) is not aggregated or alerted on. Current gap: no Cloud Monitoring custom metrics or alerting policies for input drift. Implement when traffic volume justifies it.
+
+---
 
 ## Owner
+
 Algorithm engineer transitioning to Applied Scientist / MLE at Google. Background: local model design (training/optimization), no prior ML systems, RAG, LLM tuning, or agent experience. **Guide with plain language, explain the "why", and surface insider tips relevant to Google AS interviews and production ML systems.**
-
-## Production Standards
-All code and infrastructure must meet Google production baseline. Apply these by default — do not wait to be asked.
-
-**Reliability**
-- Serving must use the same embedding model and version as indexing — a mismatch produces wrong retrieval with no error signal; the most common silent failure in production ML systems (Uber Engineering Blog, "Meet Michelangelo: Uber's Machine Learning Platform," 2017)
-- Retry ML inference calls with exponential backoff and jitter, not immediate retry — immediate retries synchronize and amplify load on a struggling service; jitter de-correlates them (AWS Architecture Blog, "Exponential Backoff And Jitter," Marc Brooker, 2015)
-- Track p95/p99 serving latency, not averages — LLM inference variance is high; tail latency governs user experience; averages mask the worst 5% of requests (Google Research, Jeff Dean, "The Tail at Scale," CACM 2013)
-
-**Observability**
-- Log model inputs, retrieved context, and outputs on every request — HTTP 200 does not mean correct answers; prediction logging is the only way to detect silent quality degradation and data drift in production (Uber Engineering Blog, "Meet Michelangelo," 2017)
-- Monitor input feature distributions continuously, not just error rates — distribution shift is the leading cause of silent model degradation; a model can stay "up" for weeks while its inputs drift out of the training domain (Uber Engineering Blog, "Meet Michelangelo," 2017)
-- Propagate a unique request_id through all log lines for a given request — without it you cannot reconstruct what happened for a specific failed inference (Google Research, "Dapper, a Large-Scale Distributed Systems Tracing Infrastructure," 2010)
-
-**Evaluation & Experimentation**
-- Every model or retrieval change requires offline eval on a golden set before production — "it worked on a few examples" is not evidence; treat offline eval as a mandatory gate, not an optional check (Google, "Rules of ML," Rule #29)
-- Shadow evaluation: route candidate models to real traffic, log both result sets, but serve only the current model's answer — measures quality on production queries with zero user risk (Uber Engineering Blog, "Meet Michelangelo," 2017: shadow mode)
-- Log a variant ID on every request from the first experiment — without it metric changes cannot be attributed to specific changes; this is the minimum viable A/B infra (Uber Engineering Blog, "Meet Michelangelo," 2017; Netflix Tech Blog, experimentation platform)
-
-**Deployment**
-- Version model artifacts, embeddings, and configs together as immutable snapshots — enables instant rollback when quality regresses without retraining; Uber Michelangelo stores versioned model packages that bundle the model, feature config, and hyperparameters (Uber Engineering Blog, "Meet Michelangelo," 2017)
-- Use phased rollout (shadow → canary → partial → full) for any model change — never flip 100% of traffic to a new model instantly; measure quality at each stage before proceeding (Uber Engineering Blog, "Meet Michelangelo," 2017; Netflix Tech Blog, ML deployment practices)
-- Run a smoke test against the live endpoint after every deploy before marking complete — CI passing proves the image builds, not that the deployed service works; post-deploy synthetic probes are a mandatory rollout gate at Google and top ML teams

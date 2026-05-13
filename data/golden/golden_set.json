@@ -1,0 +1,29 @@
+[
+  {
+    "id": "sf_ramen_tonkotsu_vibe",
+    "description": "Rich tonkotsu broth, dim atmospheric lighting, authentic Japanese feel, not too loud",
+    "city": "San Francisco",
+    "country": "USA",
+    "selected_types": ["ramen_restaurant", "restaurant"],
+    "expected_names": ["Mensho Tokyo", "Marufuku Ramen", "Noodle in a Haystack"],
+    "note": "Tests atmosphere embedding — 'dim lighting', 'authentic', 'not too loud' should surface review-rich places over just highly-rated ones."
+  },
+  {
+    "id": "sf_coffee_work",
+    "description": "Quiet, good for solo laptop work, plenty of natural light, not too crowded on weekday mornings",
+    "city": "San Francisco",
+    "country": "USA",
+    "selected_types": ["cafe", "coffee_shop"],
+    "expected_names": ["Sightglass Coffee", "Ritual Coffee Roasters", "Verve Coffee Roasters"],
+    "note": "Tests work-context embedding — 'laptop work', 'natural light', 'not crowded' are vibe signals absent from place names but present in reviews."
+  },
+  {
+    "id": "sf_bar_rooftop_groups",
+    "description": "Rooftop or elevated views, craft cocktails, good for a group celebration, lively and energetic",
+    "city": "San Francisco",
+    "country": "USA",
+    "selected_types": ["bar", "wine_bar"],
+    "expected_names": ["Charmaine's Rooftop Bar & Lounge", "The View Lounge", "Dirty Habit"],
+    "note": "Tests multi-signal embedding — physical attribute (rooftop), drinks quality, social context (group), and energy level all need to match."
+  }
+]
