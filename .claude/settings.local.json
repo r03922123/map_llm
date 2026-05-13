@@ -2,7 +2,11 @@
   "permissions": {
     "allow": [
       "Bash(pip install *)",
-      "Bash(pip3 install *)"
+      "Bash(pip3 install *)",
+      "Bash(gcloud run services describe *)",
+      "Bash(git -C /Users/linjiehong/Desktop/map_llm add docs/)",
+      "Bash(git -C /Users/linjiehong/Desktop/map_llm commit -m \"Add engineering and ML methods design docs\")",
+      "Bash(git -C /Users/linjiehong/Desktop/map_llm push)"
     ]
   }
 }
